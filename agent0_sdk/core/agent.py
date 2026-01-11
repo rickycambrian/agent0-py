@@ -36,7 +36,9 @@ class Agent:
         self._last_registered_wallet = None
         self._last_registered_ens = None
         # Initialize endpoint crawler for fetching capabilities
-        self._endpoint_crawler = EndpointCrawler(timeout=5)
+        # Pass x402 client from SDK if available for payment-enabled MCP servers
+        x402_client = getattr(sdk, 'x402_client', None)
+        self._endpoint_crawler = EndpointCrawler(timeout=5, x402_client=x402_client)
 
     # Read-only properties for direct access
     @property

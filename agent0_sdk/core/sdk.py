@@ -28,6 +28,7 @@ from .indexer import AgentIndexer
 from .ipfs_client import IPFSClient
 from .feedback_manager import FeedbackManager
 from .subgraph_client import SubgraphClient
+from .x402_client import X402Client, X402Config, create_x402_client
 
 
 class SDK:
@@ -51,12 +52,18 @@ class SDK:
         pinataJwt: Optional[str] = None,
         # Subgraph configuration
         subgraphOverrides: Optional[Dict[ChainId, str]] = None,  # Override subgraph URLs per chain
+        # x402 Payment configuration
+        x402PrivateKey: Optional[str] = None,  # Wallet for x402 payments (can be same as signer)
+        x402MaxPricePerRequest: float = 1.0,  # Maximum price per request in USD
+        x402AutoPay: bool = False,  # Auto-pay without prompting
+        x402Network: str = "base-sepolia",  # Network for payments
+        x402SessionLimit: Optional[float] = None,  # Optional session spending limit
     ):
         """Initialize the SDK."""
         self.chainId = chainId
         self.rpcUrl = rpcUrl
         self.signer = signer
-        
+
         # Initialize Web3 client (with or without signer for read-only operations)
         if signer:
             if isinstance(signer, str):
@@ -66,24 +73,24 @@ class SDK:
         else:
             # Read-only mode - no signer
             self.web3_client = Web3Client(rpcUrl)
-        
+
         # Registry addresses
         self.registry_overrides = registryOverrides or {}
         self._registries = self._resolve_registries()
-        
+
         # Initialize contract instances
         self._identity_registry = None
         self._reputation_registry = None
         self._validation_registry = None
-        
+
         # Resolve subgraph URL (with fallback chain)
         self._subgraph_urls = {}
         if subgraphOverrides:
             self._subgraph_urls.update(subgraphOverrides)
-        
+
         # Get subgraph URL for current chain
         resolved_subgraph_url = None
-        
+
         # Priority 1: Chain-specific override
         if chainId in self._subgraph_urls:
             resolved_subgraph_url = self._subgraph_urls[chainId]
@@ -93,13 +100,13 @@ class SDK:
         else:
             # No subgraph available - subgraph_client will be None
             resolved_subgraph_url = None
-        
+
         # Initialize subgraph client if URL available
         if resolved_subgraph_url:
             self.subgraph_client = SubgraphClient(resolved_subgraph_url)
         else:
             self.subgraph_client = None
-        
+
         # Initialize services
         self.indexer = AgentIndexer(
             web3_client=self.web3_client,
@@ -108,16 +115,16 @@ class SDK:
             subgraph_client=self.subgraph_client,
             subgraph_url_overrides=self._subgraph_urls
         )
-        
+
         # Initialize IPFS client based on configuration
         self.ipfs_client = self._initialize_ipfs_client(
             ipfs, ipfsNodeUrl, filecoinPrivateKey, pinataJwt
         )
-        
+
         # Load registries before passing to FeedbackManager
         identity_registry = self.identity_registry
         reputation_registry = self.reputation_registry
-        
+
         self.feedback_manager = FeedbackManager(
             subgraph_client=self.subgraph_client,
             web3_client=self.web3_client,
@@ -127,42 +134,77 @@ class SDK:
             indexer=self.indexer  # Pass indexer for unified search interface
         )
 
+        # Initialize x402 client for payment-enabled MCP servers
+        self.x402_client = self._initialize_x402_client(
+            x402PrivateKey,
+            x402MaxPricePerRequest,
+            x402AutoPay,
+            x402Network,
+            x402SessionLimit
+        )
+
+    def _initialize_x402_client(
+        self,
+        private_key: Optional[str],
+        max_price_per_request: float,
+        auto_pay: bool,
+        network: str,
+        session_limit: Optional[float]
+    ) -> Optional[X402Client]:
+        """Initialize x402 payment client if configured."""
+        if not private_key:
+            return None
+
+        try:
+            client = create_x402_client(
+                private_key=private_key,
+                max_price_per_request=max_price_per_request,
+                auto_pay=auto_pay,
+                preferred_network=network,
+                session_spending_limit=session_limit
+            )
+            logger.info(f"x402 payment client initialized (max ${max_price_per_request}/request, auto_pay={auto_pay})")
+            return client
+        except Exception as e:
+            logger.warning(f"Failed to initialize x402 client: {e}")
+            return None
+
     def _resolve_registries(self) -> Dict[str, Address]:
         """Resolve registry addresses for current chain."""
         # Start with defaults
         registries = DEFAULT_REGISTRIES.get(self.chainId, {}).copy()
-        
+
         # Apply overrides
         if self.chainId in self.registry_overrides:
             registries.update(self.registry_overrides[self.chainId])
-        
+
         return registries
 
     def _initialize_ipfs_client(
-        self, 
-        ipfs: Optional[str], 
-        ipfsNodeUrl: Optional[str], 
-        filecoinPrivateKey: Optional[str], 
+        self,
+        ipfs: Optional[str],
+        ipfsNodeUrl: Optional[str],
+        filecoinPrivateKey: Optional[str],
         pinataJwt: Optional[str]
     ) -> Optional[IPFSClient]:
         """Initialize IPFS client based on configuration."""
         if not ipfs:
             return None
-            
+
         if ipfs == "node":
             if not ipfsNodeUrl:
                 raise ValueError("ipfsNodeUrl is required when ipfs='node'")
             return IPFSClient(url=ipfsNodeUrl, filecoin_pin_enabled=False)
-            
+
         elif ipfs == "filecoinPin":
             if not filecoinPrivateKey:
                 raise ValueError("filecoinPrivateKey is required when ipfs='filecoinPin'")
             return IPFSClient(
-                url=None, 
-                filecoin_pin_enabled=True, 
+                url=None,
+                filecoin_pin_enabled=True,
                 filecoin_private_key=filecoinPrivateKey
             )
-            
+
         elif ipfs == "pinata":
             if not pinataJwt:
                 raise ValueError("pinataJwt is required when ipfs='pinata'")
@@ -172,7 +214,7 @@ class SDK:
                 pinata_enabled=True,
                 pinata_jwt=pinataJwt
             )
-            
+
         else:
             raise ValueError(f"Invalid ipfs value: {ipfs}. Must be 'node', 'filecoinPin', or 'pinata'")
 
@@ -228,26 +270,26 @@ class SDK:
     def get_subgraph_client(self, chain_id: Optional[ChainId] = None) -> Optional[SubgraphClient]:
         """
         Get subgraph client for a specific chain.
-        
+
         Args:
             chain_id: Chain ID (defaults to current chain)
-            
+
         Returns:
             SubgraphClient instance or None if no subgraph available
         """
         target_chain = chain_id if chain_id is not None else self.chainId
-        
+
         # Check if we already have a client for this chain
         if target_chain == self.chainId and self.subgraph_client:
             return self.subgraph_client
-        
+
         # Resolve URL for target chain
         url = None
         if target_chain in self._subgraph_urls:
             url = self._subgraph_urls[target_chain]
         elif target_chain in DEFAULT_SUBGRAPH_URLS:
             url = DEFAULT_SUBGRAPH_URLS[target_chain]
-        
+
         if url:
             return SubgraphClient(url)
         return None
@@ -279,14 +321,14 @@ class SDK:
 
     def loadAgent(self, agentId: AgentId) -> Agent:
         """Load an existing agent (hydrates from registration file if registered).
-        
+
         Note: Agents can be minted with an empty token URI (e.g. IPFS flow where publish fails).
         In that case we return a partially-hydrated Agent with an empty registration file so the
         caller can resume publishing and set the URI later.
         """
         # Convert agentId to string if it's an integer
         agentId = str(agentId)
-        
+
         # Parse agent ID
         if ":" in agentId:
             chain_id, token_id = agentId.split(":", 1)
@@ -294,7 +336,7 @@ class SDK:
                 raise ValueError(f"Agent {agentId} is not on current chain {self.chainId}")
         else:
             token_id = agentId
-        
+
         # Get token URI from contract
         try:
             agent_uri = self.web3_client.call_contract(
@@ -302,7 +344,7 @@ class SDK:
             )
         except Exception as e:
             raise ValueError(f"Failed to load agent {agentId}: {e}")
-        
+
         # Load registration file (or fall back to a minimal file if agent URI is missing)
         registration_file = self._load_registration_file(agent_uri)
         registration_file.agentId = agentId
@@ -313,21 +355,21 @@ class SDK:
                 f"Agent {agentId} has no agentURI set on-chain yet. "
                 "Returning a partial agent; update info and call registerIPFS() to publish and set URI."
             )
-        
+
         # Store registry address for proper JSON generation
         registry_address = self._registries.get("IDENTITY")
         if registry_address:
             registration_file._registry_address = registry_address
             registration_file._chain_id = self.chainId
-        
+
         # Hydrate on-chain data
         self._hydrate_agent_data(registration_file, int(token_id))
-        
+
         return Agent(sdk=self, registration_file=registration_file)
 
     def _load_registration_file(self, uri: str) -> RegistrationFile:
         """Load registration file from URI.
-        
+
         If uri is empty/None/whitespace, returns an empty RegistrationFile to allow resume flows.
         """
         if not uri or not str(uri).strip():
@@ -347,7 +389,7 @@ class SDK:
                 raise ImportError("requests not installed. Install with: pip install requests")
         else:
             raise ValueError(f"Unsupported URI scheme: {uri}")
-        
+
         data = json.loads(content)
         return RegistrationFile.from_dict(data)
 
@@ -358,11 +400,11 @@ class SDK:
             self.identity_registry, "ownerOf", token_id
         )
         registration_file.owners = [owner]
-        
+
         # Get operators (this would require additional contract calls)
         # For now, we'll leave it empty
         registration_file.operators = []
-        
+
         # Hydrate agentWallet from on-chain (now uses getAgentWallet() instead of metadata)
         agent_id = token_id
         try:
@@ -378,7 +420,7 @@ class SDK:
         except Exception as e:
             # No on-chain wallet set, will fall back to registration file
             pass
-        
+
         try:
             # Try to get agentName (ENS) from on-chain metadata
             name_bytes = self.web3_client.call_contract(
@@ -403,7 +445,7 @@ class SDK:
         except Exception as e:
             # No on-chain ENS name, will fall back to registration file
             pass
-        
+
         # Try to get custom metadata keys from registration file and check on-chain
         # Note: We can't enumerate on-chain metadata keys, so we check each key from the registration file
         # Also check for common custom metadata keys that might exist on-chain
@@ -413,7 +455,7 @@ class SDK:
         for key in known_keys:
             if key not in keys_to_check:
                 keys_to_check.append(key)
-        
+
         for key in keys_to_check:
             try:
                 value_bytes = self.web3_client.call_contract(
@@ -464,15 +506,15 @@ class SDK:
         **kwargs  # Accept search criteria as kwargs for better DX
     ) -> Dict[str, Any]:
         """Search for agents.
-        
+
         Examples:
             # Simple kwargs for better developer experience
             sdk.searchAgents(name="Test")
             sdk.searchAgents(mcpTools=["code_generation"], active=True)
-            
+
             # Explicit SearchParams (for complex queries or IDE autocomplete)
             sdk.searchAgents(SearchParams(name="Test", mcpTools=["code_generation"]))
-            
+
             # With pagination
             sdk.searchAgents(name="Test", page_size=10)
         """
@@ -483,7 +525,7 @@ class SDK:
             params = SearchParams()
         elif isinstance(params, dict):
             params = SearchParams(**params)
-        
+
         if sort is None:
             sort = ["updatedAt:desc"]
         elif isinstance(sort, str):
@@ -515,7 +557,7 @@ class SDK:
             # Expand "all" if needed
             if chains == "all":
                 chains = self.indexer._get_all_configured_chains()
-            
+
             # If multiple chains or single chain different from default
             if isinstance(chains, list) and len(chains) > 0:
                 if len(chains) > 1 or (len(chains) == 1 and chains[0] != self.chainId):
@@ -525,28 +567,28 @@ class SDK:
                             minAverageScore, includeRevoked, page_size, cursor, sort, chains
                         )
                     )
-        
+
         # Single chain search (existing behavior)
         if not self.subgraph_client:
             raise ValueError("Subgraph client required for searchAgentsByReputation")
-        
+
         if sort is None:
             sort = ["createdAt:desc"]
-        
+
         skip = 0
         if cursor:
             try:
                 skip = int(cursor)
             except ValueError:
                 skip = 0
-        
+
         order_by = "createdAt"
         order_direction = "desc"
         if sort and len(sort) > 0:
             sort_field = sort[0].split(":")
             order_by = sort_field[0] if len(sort_field) >= 1 else order_by
             order_direction = sort_field[1] if len(sort_field) >= 2 else order_direction
-        
+
         try:
             agents_data = self.subgraph_client.search_agents_by_reputation(
                 agents=agents,
@@ -563,14 +605,14 @@ class SDK:
                 order_by=order_by,
                 order_direction=order_direction
             )
-            
+
             from .models import AgentSummary
             results = []
             for agent_data in agents_data:
                 reg_file = agent_data.get('registrationFile') or {}
                 if not isinstance(reg_file, dict):
                     reg_file = {}
-                
+
                 agent_summary = AgentSummary(
                     chainId=int(agent_data.get('chainId', 0)),
                     agentId=agent_data.get('id'),
@@ -594,13 +636,13 @@ class SDK:
                     extras={'averageScore': agent_data.get('averageScore')}
                 )
                 results.append(agent_summary)
-            
+
             next_cursor = str(skip + len(results)) if len(results) == page_size else None
             return {"items": results, "nextCursor": next_cursor}
-            
+
         except Exception as e:
             raise ValueError(f"Failed to search agents by reputation: {e}")
-    
+
     async def _search_agents_by_reputation_across_chains(
         self,
         agents: Optional[List[AgentId]],
@@ -619,36 +661,36 @@ class SDK:
     ) -> Dict[str, Any]:
         """
         Search agents by reputation across multiple chains in parallel.
-        
+
         Similar to indexer._search_agents_across_chains() but for reputation-based search.
         """
         import time
         start_time = time.time()
-        
+
         if sort is None:
             sort = ["createdAt:desc"]
-        
+
         order_by = "createdAt"
         order_direction = "desc"
         if sort and len(sort) > 0:
             sort_field = sort[0].split(":")
             order_by = sort_field[0] if len(sort_field) >= 1 else order_by
             order_direction = sort_field[1] if len(sort_field) >= 2 else order_direction
-        
+
         skip = 0
         if cursor:
             try:
                 skip = int(cursor)
             except ValueError:
                 skip = 0
-        
+
         # Define async function for querying a single chain
         async def query_single_chain(chain_id: int) -> Dict[str, Any]:
             """Query one chain and return its results with metadata."""
             try:
                 # Get subgraph client for this chain
                 subgraph_client = self.indexer._get_subgraph_client_for_chain(chain_id)
-                
+
                 if subgraph_client is None:
                     logger.warning(f"No subgraph client available for chain {chain_id}")
                     return {
@@ -657,7 +699,7 @@ class SDK:
                         "agents": [],
                         "error": f"No subgraph configured for chain {chain_id}"
                     }
-                
+
                 # Execute reputation search query
                 try:
                     agents_data = subgraph_client.search_agents_by_reputation(
@@ -675,19 +717,19 @@ class SDK:
                         order_by=order_by,
                         order_direction=order_direction
                     )
-                    
+
                     logger.info(f"Chain {chain_id}: fetched {len(agents_data)} agents by reputation")
                 except Exception as e:
                     logger.error(f"Error in search_agents_by_reputation for chain {chain_id}: {e}", exc_info=True)
                     agents_data = []
-                
+
                 return {
                     "chainId": chain_id,
                     "status": "success",
                     "agents": agents_data,
                     "count": len(agents_data),
                 }
-                
+
             except Exception as e:
                 logger.error(f"Error querying chain {chain_id} for reputation search: {e}", exc_info=True)
                 return {
@@ -697,16 +739,16 @@ class SDK:
                     "error": str(e),
                     "count": 0
                 }
-        
+
         # Execute queries in parallel
         chain_tasks = [query_single_chain(chain_id) for chain_id in chains]
         chain_results = await asyncio.gather(*chain_tasks)
-        
+
         # Aggregate results from all chains
         all_agents = []
         successful_chains = []
         failed_chains = []
-        
+
         for result in chain_results:
             chain_id = result["chainId"]
             if result["status"] == "success":
@@ -717,9 +759,9 @@ class SDK:
             else:
                 failed_chains.append(chain_id)
                 logger.warning(f"Chain {chain_id}: status={result.get('status')}, error={result.get('error', 'N/A')}")
-        
+
         logger.debug(f"Total agents aggregated: {len(all_agents)} from {len(successful_chains)} chains")
-        
+
         # Transform to AgentSummary objects
         from .models import AgentSummary
         results = []
@@ -727,7 +769,7 @@ class SDK:
             reg_file = agent_data.get('registrationFile') or {}
             if not isinstance(reg_file, dict):
                 reg_file = {}
-            
+
             agent_summary = AgentSummary(
                 chainId=int(agent_data.get('chainId', 0)),
                 agentId=agent_data.get('id'),
@@ -751,7 +793,7 @@ class SDK:
                 extras={'averageScore': agent_data.get('averageScore')}
             )
             results.append(agent_summary)
-        
+
         # Sort by averageScore (descending) if available, otherwise by createdAt
         results.sort(
             key=lambda x: (
@@ -761,13 +803,13 @@ class SDK:
             ),
             reverse=True
         )
-        
+
         # Apply pagination
         paginated_results = results[skip:skip + page_size]
         next_cursor = str(skip + len(paginated_results)) if len(paginated_results) == page_size and skip + len(paginated_results) < len(results) else None
-        
+
         elapsed_ms = int((time.time() - start_time) * 1000)
-        
+
         return {
             "items": paginated_results,
             "nextCursor": next_cursor,
@@ -779,16 +821,16 @@ class SDK:
                 "timing": {"totalMs": elapsed_ms}
             }
         }
-    
+
     # Feedback methods - delegate to feedback_manager
     def prepareFeedbackFile(self, input: Dict[str, Any]) -> Dict[str, Any]:
         """Prepare an off-chain feedback file payload.
-        
+
         This is intentionally off-chain-only; it does not attempt to represent
         the on-chain fields (score/tag1/tag2/endpoint-on-chain).
         """
         return self.feedback_manager.prepareFeedbackFile(input)
-    
+
     def giveFeedback(
         self,
         agentId: "AgentId",
@@ -799,7 +841,7 @@ class SDK:
         feedbackFile: Optional[Dict[str, Any]] = None,
     ) -> "Feedback":
         """Give feedback (on-chain first; optional off-chain file upload).
-        
+
         - If feedbackFile is None: submit on-chain only (no upload even if IPFS is configured).
         - If feedbackFile is provided: requires IPFS configured; uploads and commits URI/hash on-chain.
         """
@@ -811,7 +853,7 @@ class SDK:
             endpoint=endpoint,
             feedbackFile=feedbackFile,
         )
-    
+
     def getFeedback(
         self,
         agentId: "AgentId",
@@ -853,7 +895,7 @@ class SDK:
             first=first,
             skip=skip,
         )
-    
+
     def revokeFeedback(
         self,
         agentId: "AgentId",
@@ -864,7 +906,7 @@ class SDK:
         return self.feedback_manager.revokeFeedback(
             agentId, clientAddress, feedbackIndex
         )
-    
+
     def appendResponse(
         self,
         agentId: "AgentId",
@@ -876,7 +918,7 @@ class SDK:
         return self.feedback_manager.appendResponse(
             agentId, clientAddress, feedbackIndex, response
         )
-    
+
     def getReputationSummary(
         self,
         agentId: "AgentId",
@@ -885,42 +927,42 @@ class SDK:
         return self.feedback_manager.getReputationSummary(
             agentId
         )
-    
+
     def transferAgent(
         self,
         agentId: "AgentId",
         newOwnerAddress: str,
     ) -> Dict[str, Any]:
         """Transfer agent ownership to a new address.
-        
+
         Convenience method that loads the agent and calls transfer().
-        
+
         Args:
             agentId: The agent ID to transfer
             newOwnerAddress: Ethereum address of the new owner
-            
+
         Returns:
             Transaction receipt
-            
+
         Raises:
             ValueError: If agent not found or transfer not allowed
         """
         # Load the agent
         agent = self.loadAgent(agentId)
-        
+
         # Call the transfer method
         return agent.transfer(newOwnerAddress)
-    
+
     # Utility methods for owner operations
     def getAgentOwner(self, agentId: AgentId) -> str:
         """Get the current owner of an agent.
-        
+
         Args:
             agentId: The agent ID to check (can be "chainId:tokenId" or just tokenId)
-            
+
         Returns:
             The current owner's Ethereum address
-            
+
         Raises:
             ValueError: If agent ID is invalid or agent doesn't exist
         """
@@ -930,7 +972,7 @@ class SDK:
                 tokenId = int(str(agentId).split(":")[-1])
             else:
                 tokenId = int(agentId)
-            
+
             owner = self.web3_client.call_contract(
                 self.identity_registry,
                 "ownerOf",
@@ -939,17 +981,17 @@ class SDK:
             return owner
         except Exception as e:
             raise ValueError(f"Failed to get owner for agent {agentId}: {e}")
-    
+
     def isAgentOwner(self, agentId: AgentId, address: Optional[str] = None) -> bool:
         """Check if an address is the owner of an agent.
-        
+
         Args:
             agentId: The agent ID to check
             address: Address to check (defaults to SDK's signer address)
-            
+
         Returns:
             True if the address is the owner, False otherwise
-            
+
         Raises:
             ValueError: If agent ID is invalid or agent doesn't exist
         """
@@ -957,20 +999,20 @@ class SDK:
             if not self.signer:
                 raise ValueError("No signer available and no address provided")
             address = self.web3_client.account.address
-        
+
         try:
             owner = self.getAgentOwner(agentId)
             return owner.lower() == address.lower()
         except ValueError:
             return False
-    
+
     def canTransferAgent(self, agentId: AgentId, address: Optional[str] = None) -> bool:
         """Check if an address can transfer an agent (i.e., is the owner).
-        
+
         Args:
             agentId: The agent ID to check
             address: Address to check (defaults to SDK's signer address)
-            
+
         Returns:
             True if the address can transfer the agent, False otherwise
         """

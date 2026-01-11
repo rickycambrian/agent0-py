@@ -2,13 +2,18 @@
 Endpoint Crawler for MCP and A2A Servers
 Automatically fetches capabilities (tools, prompts, resources, skills) from endpoints
 when an agent is registered. Uses soft failure - never blocks registration.
+
+Supports x402 payment-enabled MCP servers when configured with a payment client.
 """
 
 import logging
 import requests
 import json
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, TYPE_CHECKING
 from urllib.parse import urlparse
+
+if TYPE_CHECKING:
+    from .x402_client import X402Client
 
 logger = logging.getLogger(__name__)
 
@@ -26,27 +31,46 @@ def create_jsonrpc_request(method: str, params: Dict = None, request_id: int = 1
 
 
 class EndpointCrawler:
-    """Crawls MCP and A2A endpoints to fetch capabilities."""
-    
-    def __init__(self, timeout: int = 5):
+    """Crawls MCP and A2A endpoints to fetch capabilities.
+
+    Optionally supports x402 payment-enabled endpoints when configured
+    with an X402Client.
+    """
+
+    def __init__(
+        self,
+        timeout: int = 5,
+        x402_client: Optional["X402Client"] = None
+    ):
         """
         Initialize the endpoint crawler.
-        
+
         Args:
             timeout: Request timeout in seconds (default: 5)
+            x402_client: Optional x402 client for payment-enabled endpoints
         """
         self.timeout = timeout
-    
+        self._x402_client = x402_client
+
+    def set_x402_client(self, client: Optional["X402Client"]) -> None:
+        """Set or update the x402 client for payment support."""
+        self._x402_client = client
+
+    @property
+    def x402_enabled(self) -> bool:
+        """Check if x402 payments are enabled."""
+        return self._x402_client is not None and self._x402_client.payments_enabled
+
     def fetch_mcp_capabilities(self, endpoint: str) -> Optional[Dict[str, Any]]:
         """
         Fetch MCP capabilities (tools, prompts, resources) from an MCP server.
-        
+
         MCP Protocol uses JSON-RPC over HTTP POST. Tries JSON-RPC first,
         then falls back to static agentcard.json.
-        
+
         Args:
             endpoint: MCP endpoint URL (must be http:// or https://)
-            
+
         Returns:
             Dict with keys: 'mcpTools', 'mcpPrompts', 'mcpResources'
             Returns None if unable to fetch
@@ -55,38 +79,38 @@ class EndpointCrawler:
         if not endpoint.startswith(('http://', 'https://')):
             logger.warning(f"MCP endpoint must be HTTP/HTTPS, got: {endpoint}")
             return None
-        
+
         # Try JSON-RPC approach first (for real MCP servers)
         capabilities = self._fetch_via_jsonrpc(endpoint)
         if capabilities:
             return capabilities
-        
+
         # Fallback to static agentcard.json
         try:
             agentcard_url = f"{endpoint}/agentcard.json"
             logger.debug(f"Attempting to fetch MCP capabilities from {agentcard_url}")
-            
+
             response = requests.get(agentcard_url, timeout=self.timeout, allow_redirects=True)
-            
+
             if response.status_code == 200:
                 data = response.json()
-                
+
                 # Extract capabilities from agentcard
                 capabilities = {
                     'mcpTools': self._extract_list(data, 'tools'),
                     'mcpPrompts': self._extract_list(data, 'prompts'),
                     'mcpResources': self._extract_list(data, 'resources')
                 }
-                
+
                 if any(capabilities.values()):
                     logger.info(f"Successfully fetched MCP capabilities from {endpoint}")
                     return capabilities
-                    
+
         except Exception as e:
             logger.debug(f"Could not fetch MCP capabilities from {endpoint}: {e}")
-        
+
         return None
-    
+
     def _fetch_via_jsonrpc(self, http_url: str) -> Optional[Dict[str, Any]]:
         """Try to fetch capabilities via JSON-RPC."""
         try:
@@ -94,29 +118,29 @@ class EndpointCrawler:
             tools = self._jsonrpc_call(http_url, "tools/list")
             resources = self._jsonrpc_call(http_url, "resources/list")
             prompts = self._jsonrpc_call(http_url, "prompts/list")
-            
+
             mcp_tools = []
             mcp_resources = []
             mcp_prompts = []
-            
+
             # Extract names from tools
             if tools and isinstance(tools, dict) and "tools" in tools:
                 for tool in tools["tools"]:
                     if isinstance(tool, dict) and "name" in tool:
                         mcp_tools.append(tool["name"])
-            
+
             # Extract names from resources
             if resources and isinstance(resources, dict) and "resources" in resources:
                 for resource in resources["resources"]:
                     if isinstance(resource, dict) and "name" in resource:
                         mcp_resources.append(resource["name"])
-            
+
             # Extract names from prompts
             if prompts and isinstance(prompts, dict) and "prompts" in prompts:
                 for prompt in prompts["prompts"]:
                     if isinstance(prompt, dict) and "name" in prompt:
                         mcp_prompts.append(prompt["name"])
-            
+
             if mcp_tools or mcp_resources or mcp_prompts:
                 logger.info(f"Successfully fetched MCP capabilities via JSON-RPC")
                 return {
@@ -124,22 +148,33 @@ class EndpointCrawler:
                     'mcpResources': mcp_resources,
                     'mcpPrompts': mcp_prompts
                 }
-        
+
         except Exception as e:
             logger.debug(f"JSON-RPC approach failed: {e}")
-        
+
         return None
-    
+
     def _jsonrpc_call(self, url: str, method: str, params: Dict = None) -> Optional[Dict[str, Any]]:
-        """Make a JSON-RPC call and return the result. Handles SSE format."""
+        """Make a JSON-RPC call and return the result. Handles SSE format and x402 payments."""
         try:
             payload = create_jsonrpc_request(method, params or {})
             headers = {
                 'Content-Type': 'application/json',
                 'Accept': 'application/json, text/event-stream'
             }
-            response = requests.post(url, json=payload, timeout=self.timeout, headers=headers, stream=True)
-            
+
+            # Use x402 client if available, otherwise use regular requests
+            if self._x402_client:
+                response = self._x402_client.post(
+                    url,
+                    json=payload,
+                    timeout=self.timeout,
+                    headers=headers,
+                    handle_402=True  # Let x402 client handle payment
+                )
+            else:
+                response = requests.post(url, json=payload, timeout=self.timeout, headers=headers, stream=True)
+
             if response.status_code == 200:
                 # Check if response is SSE format
                 content_type = response.headers.get('content-type', '')
@@ -154,11 +189,15 @@ class EndpointCrawler:
                     if "result" in result:
                         return result["result"]
                     return result
+            elif response.status_code == 402:
+                # Got 402 but x402 client is not configured or payment failed
+                logger.warning(f"MCP endpoint requires payment (402) but x402 is not enabled: {url}")
+                return None
         except Exception as e:
             logger.debug(f"JSON-RPC call {method} failed: {e}")
-        
+
         return None
-    
+
     def _parse_sse_response(self, sse_text: str) -> Optional[Dict[str, Any]]:
         """Parse Server-Sent Events (SSE) format response."""
         try:
@@ -172,9 +211,9 @@ class EndpointCrawler:
                     return data
         except Exception as e:
             logger.debug(f"Failed to parse SSE response: {e}")
-        
+
         return None
-    
+
     def fetch_a2a_capabilities(self, endpoint: str) -> Optional[Dict[str, Any]]:
         """
         Fetch A2A capabilities (skills) from an A2A server.
@@ -285,20 +324,20 @@ class EndpointCrawler:
                 unique_result.append(item)
 
         return unique_result
-    
+
     def _extract_list(self, data: Dict[str, Any], key: str) -> List[str]:
         """
         Extract a list of strings from nested JSON data.
-        
+
         Args:
             data: JSON data dictionary
             key: Key to extract (e.g., 'tools', 'prompts', 'resources', 'skills')
-            
+
         Returns:
             List of string names/IDs
         """
         result = []
-        
+
         # Try top-level key
         if key in data and isinstance(data[key], list):
             for item in data[key]:
@@ -310,7 +349,7 @@ class EndpointCrawler:
                         if name_field in item and isinstance(item[name_field], str):
                             result.append(item[name_field])
                             break
-        
+
         # Try nested in 'capabilities' or 'abilities'
         if not result:
             for container_key in ['capabilities', 'abilities', 'features']:
@@ -326,5 +365,5 @@ class EndpointCrawler:
                                         break
                     if result:
                         break
-        
+
         return result

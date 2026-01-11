@@ -30,12 +30,32 @@ except ImportError:
     Agent = None
     _sdk_available = False
 
+# x402 payment support (optional - gracefully degrades if x402 package not installed)
+try:
+    from .core.x402_client import (
+        X402Client,
+        X402Config,
+        X402PaymentError,
+        X402PriceExceededError,
+        X402PaymentDeclinedError,
+        create_x402_client,
+    )
+    _x402_available = True
+except ImportError:
+    X402Client = None
+    X402Config = None
+    X402PaymentError = None
+    X402PriceExceededError = None
+    X402PaymentDeclinedError = None
+    create_x402_client = None
+    _x402_available = False
+
 __version__ = "1.0.2"
 __all__ = [
     "SDK",
     "Agent",
     "AgentId",
-    "ChainId", 
+    "ChainId",
     "Address",
     "URI",
     "CID",
@@ -49,4 +69,11 @@ __all__ = [
     "Feedback",
     "SearchParams",
     "SearchFeedbackParams",
+    # x402 payment support
+    "X402Client",
+    "X402Config",
+    "X402PaymentError",
+    "X402PriceExceededError",
+    "X402PaymentDeclinedError",
+    "create_x402_client",
 ]

@@ -39,6 +39,9 @@ dependencies = [
 indexer = [
     "sentence-transformers>=2.2.0",
 ]
+x402 = [
+    "x402>=1.0.0",
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",

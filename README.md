@@ -269,18 +269,129 @@ The SDK includes complete OASF v0.8.0 taxonomy files:
 
 Browse these files to find appropriate skill and domain slugs. For more information, see the [OASF specification](https://github.com/agntcy/oasf) and [Release Notes v0.31](RELEASE_NOTES_0.31.md).
 
+## x402 Payment Support
+
+The SDK includes built-in support for [x402](https://x402.org), the HTTP-native payment protocol. This enables seamless interaction with payment-enabled MCP servers that charge per-request fees.
+
+### Installation
+
+Install with x402 support:
+
+```bash
+pip install agent0-sdk[x402]
+```
+
+### SDK-Level Configuration
+
+Configure x402 payments when initializing the SDK:
+
+```python
+from agent0_sdk import SDK
+import os
+
+sdk = SDK(
+    chainId=11155111,
+    rpcUrl=os.getenv("RPC_URL"),
+    signer=os.getenv("PRIVATE_KEY"),
+    ipfs="pinata",
+    pinataJwt=os.getenv("PINATA_JWT"),
+    # x402 payment configuration
+    x402PrivateKey=os.getenv("X402_PRIVATE_KEY"),  # Wallet for payments
+    x402MaxPricePerRequest=0.10,  # Maximum $0.10 per request
+    x402AutoPay=True,  # Auto-pay without prompting
+    x402Network="base-sepolia",  # Payment network
+    x402SessionLimit=5.0,  # Optional session spending limit
+)
+```
+
+### Standalone x402 Client
+
+You can also use the x402 client directly for custom integrations:
+
+```python
+from agent0_sdk import create_x402_client
+import os
+
+# Create payment-enabled HTTP client
+client = create_x402_client(
+    private_key=os.getenv("X402_PRIVATE_KEY"),
+    max_price_per_request=0.10,
+    auto_pay=True,
+    preferred_network="base-sepolia",
+    session_spending_limit=10.0,
+)
+
+# Make requests to x402-enabled endpoints
+# Automatically handles 402 responses and payments
+response = client.post(
+    "https://mcp-server.example.com/",
+    json={"jsonrpc": "2.0", "method": "tools/list", "id": 1}
+)
+
+# Check session spending
+print(f"Total spent: ${client.get_session_spending()}")
+```
+
+### Custom Payment Approval
+
+For more control over payments, use a custom approval callback:
+
+```python
+from agent0_sdk import create_x402_client
+
+def approve_payment(payment_details):
+    """Custom logic for approving payments."""
+    price = payment_details.get("price", 0)
+    # Only approve payments under $0.05
+    return float(price) < 0.05
+
+client = create_x402_client(
+    private_key=os.getenv("X402_PRIVATE_KEY"),
+    max_price_per_request=1.0,
+    auto_pay=False,  # Use callback instead
+    payment_approval_callback=approve_payment,
+)
+```
+
+### Registering x402-Enabled Agents
+
+To register an agent that accepts x402 payments:
+
+```python
+agent = sdk.createAgent(
+    name="My Paid MCP Agent",
+    description="MCP server with pay-per-request via x402"
+)
+
+# Enable x402 support (signals you accept payments)
+agent.setX402Support(True)
+
+# Set your MCP endpoint (your proxy that handles payments)
+agent.setMCP("https://my-x402-mcp-proxy.example.com/")
+
+# Register on-chain
+agent.registerIPFS()
+
+# Set wallet for receiving payments
+agent.setAgentWallet(
+    "0xYourWalletAddress",
+    chainId=8453,  # Base mainnet
+    new_wallet_signer=os.getenv("WALLET_PRIVATE_KEY")
+)
+```
+
 ## Use Cases
 
 - **Building agent marketplaces** - Create platforms where developers can discover, evaluate, and integrate agents based on their capabilities and reputation
 - **Agent interoperability** - Discover agents by specific capabilities (skills, tools, tasks), evaluate them through reputation signals, and integrate them via standard protocols (MCP/A2A)
 - **Managing agent reputation** - Track agent performance, collect feedback from users and other agents, and build trust signals for your agent ecosystem
 - **Cross-chain agent operations** - Deploy and manage agents across multiple blockchain networks with consistent identity and reputation
+- **Monetizing MCP servers** - Charge per-request fees for MCP tool calls using x402 payments
 
 ## 🚀 Coming Soon
 
 - More chains (currently Ethereum Sepolia only)
 - Support for validations
-- Enhanced x402 payments
 - Semantic/Vectorial search
 - Advanced reputation aggregation
 - Import/Export to centralized catalogues
@@ -297,6 +408,7 @@ Complete working examples are available in the `tests/` directory:
 - `test_oasf_management.py` - OASF skills/domains management (unit tests)
 - `test_real_public_servers.py` - Endpoint crawler against real public MCP/A2A servers
 - `test_multi_chain.py` - Multi-chain read-only operations (subgraph-based)
+- `test_x402_payment.py` - x402 payment integration tests
 
 ## Documentation
 

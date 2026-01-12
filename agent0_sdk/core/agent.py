@@ -17,6 +17,7 @@ from .models import (
 from .web3_client import Web3Client
 from .endpoint_crawler import EndpointCrawler
 from .oasf_validator import validate_skill, validate_domain
+from .mcp_client import MCPClient
 
 if TYPE_CHECKING:
     from .sdk import SDK
@@ -176,6 +177,41 @@ class Agent:
     def registrationFile(self) -> RegistrationFile:
         """Get the compiled registration file."""
         return self.registration_file
+
+    def getMCPClient(self, timeout: int = 30) -> Optional[MCPClient]:
+        """
+        Get a payment-enabled MCP client for runtime tool calls.
+
+        This allows the agent to make paid tool calls to x402-enabled MCP servers.
+        The client automatically handles payments using the SDK's x402 configuration.
+
+        Args:
+            timeout: Request timeout in seconds (default: 30)
+
+        Returns:
+            MCPClient instance if agent has an MCP endpoint, None otherwise
+
+        Example:
+            mcp = agent.getMCPClient()
+            if mcp:
+                # List available tools
+                tools = mcp.list_tools()
+
+                # Call a tool (automatically pays if required)
+                result = mcp.call_tool("generate_text", {"prompt": "Hello"})
+
+                # Check spending
+                print(f"Session spending: ${mcp.get_session_spending()}")
+        """
+        if not self.mcpEndpoint:
+            return None
+
+        x402_client = getattr(self.sdk, 'x402_client', None)
+        return MCPClient(
+            endpoint=self.mcpEndpoint,
+            x402_client=x402_client,
+            timeout=timeout,
+        )
 
     def _collectMetadataForRegistration(self) -> List[Dict[str, Any]]:
         """Collect all metadata entries for registration.

@@ -50,6 +50,15 @@ except ImportError:
     create_x402_client = None
     _x402_available = False
 
+# MCP Client for runtime tool calls (always available, x402 is optional)
+from .core.mcp_client import (
+    MCPClient,
+    MCPError,
+    MCPToolCallError,
+    MCPConnectionError,
+    MCPPaymentRequiredError,
+)
+
 __version__ = "1.0.2"
 __all__ = [
     "SDK",
@@ -76,4 +85,10 @@ __all__ = [
     "X402PriceExceededError",
     "X402PaymentDeclinedError",
     "create_x402_client",
+    # MCP runtime client
+    "MCPClient",
+    "MCPError",
+    "MCPToolCallError",
+    "MCPConnectionError",
+    "MCPPaymentRequiredError",
 ]

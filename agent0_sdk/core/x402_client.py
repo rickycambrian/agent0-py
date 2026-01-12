@@ -7,7 +7,7 @@ and submitting payments, then retrying the original request.
 This enables seamless interaction with x402-enabled MCP servers that charge
 per-request fees.
 
-Requires: pip install x402
+Requires: pip install agent0-sdk[x402]
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import base64
-from typing import Any, Dict, Optional, Callable, Union
+from typing import Dict, Optional, Callable
 from dataclasses import dataclass, field
 
 import requests
@@ -58,16 +58,19 @@ class X402Config:
 
 class X402PaymentError(Exception):
     """Raised when x402 payment fails."""
+
     pass
 
 
 class X402PriceExceededError(X402PaymentError):
     """Raised when requested price exceeds configured maximum."""
+
     pass
 
 
 class X402PaymentDeclinedError(X402PaymentError):
     """Raised when payment is declined by callback or user."""
+
     pass
 
 
@@ -77,9 +80,9 @@ class X402Client:
 
     Wraps requests to automatically handle HTTP 402 responses by:
     1. Parsing payment requirements from PAYMENT-REQUIRED header
-    2. Constructing payment payload
+    2. Constructing payment payload via the x402 library
     3. Signing and submitting payment
-    4. Retrying original request with PAYMENT-SIGNATURE header
+    4. Retrying original request with payment
 
     Example usage:
 
@@ -111,6 +114,7 @@ class X402Client:
         self.config = config
         self._x402_available = self._check_x402_available()
         self._payment_client = None
+        self._account = None
 
         if config and config.private_key and self._x402_available:
             self._init_payment_client()
@@ -118,7 +122,8 @@ class X402Client:
     def _check_x402_available(self) -> bool:
         """Check if x402 package is installed."""
         try:
-            import x402
+            import x402  # noqa: F401 - checking availability
+
             return True
         except ImportError:
             logger.debug("x402 package not installed. Payment support disabled.")
@@ -142,24 +147,25 @@ class X402Client:
             max_value_base_units = int(self.config.max_price_per_request * 1_000_000)
 
             self._payment_client = x402_requests(
-                account=account,
-                max_value=max_value_base_units
+                account=account, max_value=max_value_base_units
             )
 
-            logger.info(f"x402 payment client initialized for address {account.address}")
+            logger.info(
+                "x402 payment client initialized for address %s", account.address
+            )
 
         except Exception as e:
-            logger.warning(f"Failed to initialize x402 payment client: {e}")
+            logger.warning("Failed to initialize x402 payment client: %s", e)
             self._payment_client = None
 
     @property
     def payments_enabled(self) -> bool:
         """Check if payments are enabled and configured."""
         return (
-            self.config is not None and
-            self.config.private_key is not None and
-            self._x402_available and
-            self._payment_client is not None
+            self.config is not None
+            and self.config.private_key is not None
+            and self._x402_available
+            and self._payment_client is not None
         )
 
     def _parse_payment_required(self, response: requests.Response) -> Optional[Dict]:
@@ -173,7 +179,9 @@ class X402Client:
             Payment requirements dict or None if not parseable
         """
         # Check for PAYMENT-REQUIRED header (x402 standard)
-        payment_header = response.headers.get("PAYMENT-REQUIRED") or response.headers.get("X-Payment-Required")
+        payment_header = response.headers.get(
+            "PAYMENT-REQUIRED"
+        ) or response.headers.get("X-Payment-Required")
 
         if not payment_header:
             # Try to parse from response body
@@ -190,7 +198,7 @@ class X402Client:
             decoded = base64.b64decode(payment_header)
             return json.loads(decoded)
         except Exception as e:
-            logger.warning(f"Failed to parse PAYMENT-REQUIRED header: {e}")
+            logger.warning("Failed to parse PAYMENT-REQUIRED header: %s", e)
             # Try direct JSON parsing
             try:
                 return json.loads(payment_header)
@@ -231,7 +239,8 @@ class X402Client:
         # Check against max price
         if price > self.config.max_price_per_request:
             raise X402PriceExceededError(
-                f"Requested price ${price} exceeds configured maximum ${self.config.max_price_per_request}"
+                f"Requested price ${price} exceeds configured maximum "
+                f"${self.config.max_price_per_request}"
             )
 
         # Check session spending limit
@@ -258,101 +267,8 @@ class X402Client:
             "Payment required but auto_pay=False and no approval callback configured"
         )
 
-    def _construct_payment(self, payment_details: Dict) -> str:
-        """
-        Construct and sign payment payload.
-
-        Args:
-            payment_details: Payment requirements from server
-
-        Returns:
-            Base64-encoded payment signature
-        """
-        if not self._payment_client:
-            raise X402PaymentError("Payment client not initialized")
-
-        try:
-            # Use x402 library to construct payment
-            payment_payload = self._payment_client.create_payment(payment_details)
-
-            # Track spending
-            price = payment_details.get("price") or payment_details.get("amount")
-            if isinstance(price, dict):
-                price = float(price.get("amount", 0))
-            elif isinstance(price, str):
-                price = float(price)
-            else:
-                price = float(price) if price else 0
-            self.config.session_spending += price
-
-            return payment_payload
-
-        except Exception as e:
-            raise X402PaymentError(f"Failed to construct payment: {e}")
-
-    def _handle_402(
-        self,
-        response: requests.Response,
-        method: str,
-        url: str,
-        **kwargs
-    ) -> requests.Response:
-        """
-        Handle 402 Payment Required response.
-
-        Args:
-            response: Original 402 response
-            method: HTTP method
-            url: Request URL
-            **kwargs: Original request kwargs
-
-        Returns:
-            Response after payment and retry
-        """
-        if not self.payments_enabled:
-            logger.warning(f"Received 402 but payments not enabled for {url}")
-            return response
-
-        # Parse payment requirements
-        payment_details = self._parse_payment_required(response)
-        if not payment_details:
-            logger.warning(f"Could not parse payment requirements from 402 response")
-            return response
-
-        logger.info(f"x402 payment required: {payment_details}")
-
-        # Validate and approve payment
-        try:
-            self._validate_payment(payment_details)
-        except X402PaymentError as e:
-            logger.warning(f"Payment validation failed: {e}")
-            raise
-
-        # Construct payment
-        payment_signature = self._construct_payment(payment_details)
-
-        # Retry with payment
-        headers = kwargs.get("headers", {}).copy()
-        headers["PAYMENT-SIGNATURE"] = payment_signature
-        kwargs["headers"] = headers
-
-        logger.info(f"Retrying request with payment signature")
-
-        # Make the request again
-        retry_response = requests.request(method, url, **kwargs)
-
-        # Check if payment was accepted
-        if retry_response.status_code == 402:
-            raise X402PaymentError("Payment was not accepted by server")
-
-        return retry_response
-
     def request(
-        self,
-        method: str,
-        url: str,
-        handle_402: bool = True,
-        **kwargs
+        self, method: str, url: str, handle_402: bool = True, **kwargs
     ) -> requests.Response:
         """
         Make HTTP request with x402 payment support.
@@ -375,7 +291,10 @@ class X402Client:
                 # Note: actual payment amount is handled by x402 internally
                 return response
             except Exception as e:
-                logger.warning(f"x402 session request failed: {e}, falling back to regular request")
+                logger.warning(
+                    "x402 session request failed: %s, falling back to regular request",
+                    e,
+                )
                 # Fall through to regular request
 
         # Regular request without payment handling
@@ -384,9 +303,13 @@ class X402Client:
         # If we got 402 but couldn't handle it, log a warning
         if response.status_code == 402 and handle_402:
             if not self.payments_enabled:
-                logger.warning(f"Received 402 Payment Required but x402 payments not enabled")
+                logger.warning(
+                    "Received 402 Payment Required but x402 payments not enabled"
+                )
             elif not self._payment_client:
-                logger.warning(f"Received 402 Payment Required but payment client not initialized")
+                logger.warning(
+                    "Received 402 Payment Required but payment client not initialized"
+                )
 
         return response
 
@@ -410,10 +333,16 @@ class X402Client:
         """Get total amount spent in this session."""
         return self.config.session_spending if self.config else 0.0
 
-    def reset_session_spending(self):
+    def reset_session_spending(self) -> None:
         """Reset session spending counter."""
         if self.config:
             self.config.session_spending = 0.0
+
+    def get_wallet_address(self) -> Optional[str]:
+        """Get the wallet address used for payments."""
+        if self._account:
+            return self._account.address
+        return None
 
 
 def create_x402_client(

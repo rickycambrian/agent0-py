@@ -170,7 +170,8 @@ class EndpointCrawler:
                     json=payload,
                     timeout=self.timeout,
                     headers=headers,
-                    handle_402=True  # Let x402 client handle payment
+                    stream=True,  # Support SSE responses
+                    handle_402=True,  # Let x402 client handle payment
                 )
             else:
                 response = requests.post(url, json=payload, timeout=self.timeout, headers=headers, stream=True)

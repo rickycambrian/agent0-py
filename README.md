@@ -353,9 +353,69 @@ client = create_x402_client(
 )
 ```
 
+### Making Paid Tool Calls at Runtime
+
+The key feature: agents can make paid tool calls to x402-enabled MCP servers using the `MCPClient`:
+
+```python
+from agent0_sdk import SDK
+import os
+
+# Initialize SDK with x402 payment configuration
+sdk = SDK(
+    chainId=11155111,
+    rpcUrl=os.getenv("RPC_URL"),
+    signer=os.getenv("PRIVATE_KEY"),
+    x402PrivateKey=os.getenv("X402_PRIVATE_KEY"),
+    x402MaxPricePerRequest=0.10,
+    x402AutoPay=True,
+)
+
+# Load an agent with an MCP endpoint
+agent = sdk.loadAgent("11155111:123")
+
+# Get payment-enabled MCP client
+mcp = agent.getMCPClient()
+
+if mcp:
+    # List available tools
+    tools = mcp.list_tools()
+    print(f"Available tools: {[t['name'] for t in tools]}")
+
+    # Call a tool - automatically pays if x402 is required!
+    result = mcp.call_tool("generate_text", {"prompt": "Hello world"})
+    print(f"Result: {result}")
+
+    # Check session spending
+    print(f"Session spending: ${mcp.get_session_spending()}")
+    print(f"Wallet used: {mcp.get_wallet_address()}")
+```
+
+You can also use MCPClient directly with any MCP endpoint:
+
+```python
+from agent0_sdk import MCPClient, create_x402_client
+
+# Create x402 client for payments
+x402 = create_x402_client(
+    private_key=os.getenv("X402_PRIVATE_KEY"),
+    max_price_per_request=0.10,
+    auto_pay=True,
+)
+
+# Create MCP client with payment support
+mcp = MCPClient(
+    endpoint="https://paid-mcp-server.example.com/",
+    x402_client=x402,
+)
+
+# Make paid tool calls
+result = mcp.call_tool("expensive_operation", {"input": "data"})
+```
+
 ### Registering x402-Enabled Agents
 
-To register an agent that accepts x402 payments:
+To register an agent that **accepts** x402 payments (i.e., you're building a paid MCP server):
 
 ```python
 agent = sdk.createAgent(
@@ -363,10 +423,11 @@ agent = sdk.createAgent(
     description="MCP server with pay-per-request via x402"
 )
 
-# Enable x402 support (signals you accept payments)
+# Signal that your agent accepts x402 payments
+# Note: This is for RECEIVING payments, not making them
 agent.setX402Support(True)
 
-# Set your MCP endpoint (your proxy that handles payments)
+# Set your MCP endpoint (your x402-enabled server)
 agent.setMCP("https://my-x402-mcp-proxy.example.com/")
 
 # Register on-chain
@@ -408,7 +469,8 @@ Complete working examples are available in the `tests/` directory:
 - `test_oasf_management.py` - OASF skills/domains management (unit tests)
 - `test_real_public_servers.py` - Endpoint crawler against real public MCP/A2A servers
 - `test_multi_chain.py` - Multi-chain read-only operations (subgraph-based)
-- `test_x402_payment.py` - x402 payment integration tests
+- `test_x402_payment.py` - x402 payment client unit tests
+- `test_mcp_client.py` - MCPClient runtime tool calls with x402 payments
 
 ## Documentation
 

@@ -29,6 +29,7 @@ from .ipfs_client import IPFSClient
 from .feedback_manager import FeedbackManager
 from .subgraph_client import SubgraphClient
 from .x402_client import X402Client, X402Config, create_x402_client
+from .spending_wallet import SpendingWallet, SpendingWalletConfig
 
 
 class SDK:
@@ -52,12 +53,17 @@ class SDK:
         pinataJwt: Optional[str] = None,
         # Subgraph configuration
         subgraphOverrides: Optional[Dict[ChainId, str]] = None,  # Override subgraph URLs per chain
-        # x402 Payment configuration
+        # x402 Payment configuration (legacy - use SpendingWallet for safer payments)
         x402PrivateKey: Optional[str] = None,  # Wallet for x402 payments (can be same as signer)
         x402MaxPricePerRequest: float = 1.0,  # Maximum price per request in USD
         x402AutoPay: bool = False,  # Auto-pay without prompting
         x402Network: str = "base-sepolia",  # Network for payments
         x402SessionLimit: Optional[float] = None,  # Optional session spending limit
+        # SpendingWallet configuration (recommended for safe x402 payments)
+        spendingWallet: Optional[SpendingWallet] = None,  # Pre-configured spending wallet
+        spendingWalletSeed: Optional[str] = None,  # BIP-39 seed phrase for HD derivation
+        spendingWalletIndex: int = 0,  # HD derivation index
+        spendingWalletConfig: Optional[SpendingWalletConfig] = None,  # Policy configuration
     ):
         """Initialize the SDK."""
         self.chainId = chainId
@@ -143,6 +149,15 @@ class SDK:
             x402SessionLimit
         )
 
+        # Initialize SpendingWallet (recommended over raw x402_client)
+        self.spending_wallet = self._initialize_spending_wallet(
+            spendingWallet,
+            spendingWalletSeed,
+            spendingWalletIndex,
+            spendingWalletConfig,
+            x402Network,  # Use same network as x402
+        )
+
     def _initialize_x402_client(
         self,
         private_key: Optional[str],
@@ -168,6 +183,53 @@ class SDK:
         except Exception as e:
             logger.warning(f"Failed to initialize x402 client: {e}")
             return None
+
+    def _initialize_spending_wallet(
+        self,
+        spending_wallet: Optional[SpendingWallet],
+        seed_phrase: Optional[str],
+        derivation_index: int,
+        config: Optional[SpendingWalletConfig],
+        network: str,
+    ) -> Optional[SpendingWallet]:
+        """
+        Initialize SpendingWallet for safe x402 payments.
+
+        Priority:
+        1. Pre-configured SpendingWallet instance
+        2. HD derivation from seed phrase
+        3. None (disabled)
+        """
+        # Use pre-configured wallet if provided
+        if spending_wallet:
+            logger.info(
+                "Using pre-configured SpendingWallet: %s",
+                spending_wallet.get_address()
+            )
+            return spending_wallet
+
+        # Create from seed phrase if provided
+        if seed_phrase:
+            try:
+                # Build config
+                wallet_config = config or SpendingWalletConfig()
+                wallet_config.seed_phrase = seed_phrase
+                wallet_config.derivation_index = derivation_index
+                wallet_config.preferred_network = network
+
+                wallet = SpendingWallet.create(wallet_config)
+                logger.info(
+                    "SpendingWallet initialized via HD derivation: %s (index %d)",
+                    wallet.get_address(),
+                    derivation_index
+                )
+                return wallet
+
+            except Exception as e:
+                logger.warning(f"Failed to initialize SpendingWallet: {e}")
+                return None
+
+        return None
 
     def _resolve_registries(self) -> Dict[str, Address]:
         """Resolve registry addresses for current chain."""

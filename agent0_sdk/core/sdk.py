@@ -27,6 +27,7 @@ from .agent import Agent
 from .indexer import AgentIndexer
 from .ipfs_client import IPFSClient
 from .feedback_manager import FeedbackManager
+from .transaction_handle import TransactionHandle
 from .subgraph_client import SubgraphClient
 from .x402_client import X402Client, X402Config, create_x402_client
 from .spending_wallet import SpendingWallet, SpendingWalletConfig
@@ -377,6 +378,8 @@ class SDK:
             name=name,
             description=description,
             image=image,
+            # Default trust model: reputation (if caller doesn't set one explicitly).
+            trustModels=[TrustModel.REPUTATION],
             updatedAt=int(time.time())
         )
         return Agent(sdk=self, registration_file=registration_file)
@@ -606,7 +609,7 @@ class SDK:
         skills: Optional[List[str]] = None,
         tasks: Optional[List[str]] = None,
         names: Optional[List[str]] = None,
-        minAverageScore: Optional[int] = None,  # 0-100
+        minAverageValue: Optional[float] = None,
         includeRevoked: bool = False,
         page_size: int = 50,
         cursor: Optional[str] = None,
@@ -626,7 +629,7 @@ class SDK:
                     return asyncio.run(
                         self._search_agents_by_reputation_across_chains(
                             agents, tags, reviewers, capabilities, skills, tasks, names,
-                            minAverageScore, includeRevoked, page_size, cursor, sort, chains
+                            minAverageValue, includeRevoked, page_size, cursor, sort, chains
                         )
                     )
 
@@ -660,7 +663,7 @@ class SDK:
                 skills=skills,
                 tasks=tasks,
                 names=names,
-                minAverageScore=minAverageScore,
+                minAverageValue=minAverageValue,
                 includeRevoked=includeRevoked,
                 first=page_size,
                 skip=skip,
@@ -694,8 +697,8 @@ class SDK:
                     mcpPrompts=reg_file.get('mcpPrompts', []),
                     mcpResources=reg_file.get('mcpResources', []),
                     active=reg_file.get('active', True),
-                    x402support=reg_file.get('x402support', False),
-                    extras={'averageScore': agent_data.get('averageScore')}
+                    x402support=reg_file.get('x402Support', reg_file.get('x402support', False)),
+                    extras={'averageValue': agent_data.get('averageValue')}
                 )
                 results.append(agent_summary)
 
@@ -714,7 +717,7 @@ class SDK:
         skills: Optional[List[str]],
         tasks: Optional[List[str]],
         names: Optional[List[str]],
-        minAverageScore: Optional[int],
+        minAverageValue: Optional[float],
         includeRevoked: bool,
         page_size: int,
         cursor: Optional[str],
@@ -772,7 +775,7 @@ class SDK:
                         skills=skills,
                         tasks=tasks,
                         names=names,
-                        minAverageScore=minAverageScore,
+                        minAverageValue=minAverageValue,
                         includeRevoked=includeRevoked,
                         first=page_size * 3,  # Fetch extra to allow for filtering/sorting
                         skip=0,  # We'll handle pagination after aggregation
@@ -851,15 +854,15 @@ class SDK:
                 mcpPrompts=reg_file.get('mcpPrompts', []),
                 mcpResources=reg_file.get('mcpResources', []),
                 active=reg_file.get('active', True),
-                x402support=reg_file.get('x402support', False),
-                extras={'averageScore': agent_data.get('averageScore')}
+                x402support=reg_file.get('x402Support', reg_file.get('x402support', False)),
+                extras={'averageValue': agent_data.get('averageValue')}
             )
             results.append(agent_summary)
 
-        # Sort by averageScore (descending) if available, otherwise by createdAt
+        # Sort by averageValue (descending) if available, otherwise by createdAt
         results.sort(
             key=lambda x: (
-                x.extras.get('averageScore') if x.extras.get('averageScore') is not None else 0,
+                x.extras.get('averageValue') if x.extras.get('averageValue') is not None else 0,
                 x.chainId,
                 x.agentId
             ),
@@ -889,19 +892,19 @@ class SDK:
         """Prepare an off-chain feedback file payload.
 
         This is intentionally off-chain-only; it does not attempt to represent
-        the on-chain fields (score/tag1/tag2/endpoint-on-chain).
+        the on-chain fields (value/tag1/tag2/endpoint-on-chain).
         """
         return self.feedback_manager.prepareFeedbackFile(input)
 
     def giveFeedback(
         self,
         agentId: "AgentId",
-        score: int,
+        value: Union[int, float, str],
         tag1: Optional[str] = None,
         tag2: Optional[str] = None,
         endpoint: Optional[str] = None,
         feedbackFile: Optional[Dict[str, Any]] = None,
-    ) -> "Feedback":
+    ) -> "TransactionHandle[Feedback]":
         """Give feedback (on-chain first; optional off-chain file upload).
 
         - If feedbackFile is None: submit on-chain only (no upload even if IPFS is configured).
@@ -909,7 +912,7 @@ class SDK:
         """
         return self.feedback_manager.giveFeedback(
             agentId=agentId,
-            score=score,
+            value=value,
             tag1=tag1,
             tag2=tag2,
             endpoint=endpoint,
@@ -929,30 +932,58 @@ class SDK:
 
     def searchFeedback(
         self,
-        agentId: "AgentId",
+        agentId: Optional["AgentId"] = None,
         reviewers: Optional[List["Address"]] = None,
         tags: Optional[List[str]] = None,
         capabilities: Optional[List[str]] = None,
         skills: Optional[List[str]] = None,
         tasks: Optional[List[str]] = None,
         names: Optional[List[str]] = None,
-        minScore: Optional[int] = None,
-        maxScore: Optional[int] = None,
+        minValue: Optional[float] = None,
+        maxValue: Optional[float] = None,
         include_revoked: bool = False,
         first: int = 100,
         skip: int = 0,
+        agents: Optional[List["AgentId"]] = None,
     ) -> List["Feedback"]:
-        """Search feedback for an agent."""
+        """Search feedback.
+        
+        Backwards compatible:
+        - Previously required `agentId`; it is now optional.
+        
+        New:
+        - `agents` can be used to search feedback across multiple agents in one call.
+        - `reviewers` can now be used without specifying any agent, enabling "all feedback given by a wallet".
+        """
+        has_any_filter = any([
+            bool(agentId),
+            bool(agents),
+            bool(reviewers),
+            bool(tags),
+            bool(capabilities),
+            bool(skills),
+            bool(tasks),
+            bool(names),
+            minValue is not None,
+            maxValue is not None,
+        ])
+        if not has_any_filter:
+            raise ValueError(
+                "searchFeedback requires at least one filter "
+                "(agentId/agents/reviewers/tags/capabilities/skills/tasks/names/minValue/maxValue)."
+            )
+
         return self.feedback_manager.searchFeedback(
             agentId=agentId,
+            agents=agents,
             clientAddresses=reviewers,
             tags=tags,
             capabilities=capabilities,
             skills=skills,
             tasks=tasks,
             names=names,
-            minScore=minScore,
-            maxScore=maxScore,
+            minValue=minValue,
+            maxValue=maxValue,
             include_revoked=include_revoked,
             first=first,
             skip=skip,
@@ -961,13 +992,11 @@ class SDK:
     def revokeFeedback(
         self,
         agentId: "AgentId",
-        clientAddress: "Address",
         feedbackIndex: int,
-    ) -> "Feedback":
-        """Revoke feedback."""
-        return self.feedback_manager.revokeFeedback(
-            agentId, clientAddress, feedbackIndex
-        )
+    ) -> "TransactionHandle[Feedback]":
+        """Revoke feedback (submitted-by-default)."""
+        return self.feedback_manager.revokeFeedback(agentId, feedbackIndex)
+
 
     def appendResponse(
         self,
@@ -975,8 +1004,8 @@ class SDK:
         clientAddress: "Address",
         feedbackIndex: int,
         response: Dict[str, Any],
-    ) -> "Feedback":
-        """Append a response/follow-up to existing feedback."""
+    ) -> "TransactionHandle[Feedback]":
+        """Append a response/follow-up to existing feedback (submitted-by-default)."""
         return self.feedback_manager.appendResponse(
             agentId, clientAddress, feedbackIndex, response
         )
@@ -994,7 +1023,7 @@ class SDK:
         self,
         agentId: "AgentId",
         newOwnerAddress: str,
-    ) -> Dict[str, Any]:
+    ) -> "TransactionHandle[Dict[str, Any]]":
         """Transfer agent ownership to a new address.
 
         Convenience method that loads the agent and calls transfer().

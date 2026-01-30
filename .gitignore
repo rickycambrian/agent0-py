@@ -52,3 +52,4 @@ test_data_discovery.json
 tests/test_x402_staging.py
 tests/test_x402_staging_verbose.py
 tests/test_x402_live.py
+tests/test_spending_wallet_live.py

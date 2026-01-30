@@ -89,7 +89,7 @@ class RegistrationFile:
             endpoints.append(endpoint_dict)
         
         # Note: agentWallet is no longer included in endpoints array.
-        # It's now a reserved on-chain metadata key managed via setAgentWallet().
+        # It's now a reserved on-chain metadata key managed via Agent.setWallet().
         
         # Build registrations array
         registrations = []
@@ -106,7 +106,7 @@ class RegistrationFile:
             "name": self.name,
             "description": self.description,
             "image": self.image,
-            "endpoints": endpoints,
+            "services": endpoints,
             "registrations": registrations,
             "supportedTrust": [tm.value if isinstance(tm, TrustModel) else tm for tm in self.trustModels],
             "active": self.active,
@@ -118,7 +118,8 @@ class RegistrationFile:
     def from_dict(cls, data: Dict[str, Any]) -> RegistrationFile:
         """Create from dictionary."""
         endpoints = []
-        for ep_data in data.get("endpoints", []):
+        raw_services = data.get("services", data.get("endpoints", []))
+        for ep_data in raw_services:
             name = ep_data["name"]
             # Special handling for agentWallet - it's not a standard endpoint type
             if name == "agentWallet":
@@ -185,7 +186,9 @@ class Feedback:
     id: tuple  # (agentId, clientAddress, feedbackIndex) - tuple for efficiency
     agentId: AgentId
     reviewer: Address
-    score: Optional[int]  # 0-100
+    # ReputationRegistry Jan 2026: decimal value computed as (value:int256 / 10^valueDecimals).
+    # SDK exposes ONLY the computed value.
+    value: Optional[float]
     tags: List[str] = field(default_factory=list)
     text: Optional[str] = None
     context: Optional[Dict[str, Any]] = None
@@ -291,8 +294,8 @@ class SearchFeedbackParams:
     tasks: Optional[List[str]] = None
     names: Optional[List[str]] = None  # MCP tool/resource/prompt names
     endpoint: Optional[str] = None  # Filter by endpoint URI
-    minScore: Optional[int] = None  # 0-100
-    maxScore: Optional[int] = None  # 0-100
+    minValue: Optional[float] = None
+    maxValue: Optional[float] = None
     includeRevoked: bool = False
     
     def to_dict(self) -> Dict[str, Any]:

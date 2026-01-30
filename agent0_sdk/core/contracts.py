@@ -175,6 +175,15 @@ IDENTITY_REGISTRY_ABI = [
         "stateMutability": "nonpayable",
         "type": "function"
     },
+    {
+        "inputs": [
+            {"internalType": "uint256", "name": "agentId", "type": "uint256"}
+        ],
+        "name": "unsetAgentWallet",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
     
     # Events
     {
@@ -222,7 +231,8 @@ REPUTATION_REGISTRY_ABI = [
     {
         "inputs": [
             {"internalType": "uint256", "name": "agentId", "type": "uint256"},
-            {"internalType": "uint8", "name": "score", "type": "uint8"},
+            {"internalType": "int128", "name": "value", "type": "int128"},
+            {"internalType": "uint8", "name": "valueDecimals", "type": "uint8"},
             {"internalType": "string", "name": "tag1", "type": "string"},
             {"internalType": "string", "name": "tag2", "type": "string"},
             {"internalType": "string", "name": "endpoint", "type": "string"},
@@ -275,7 +285,8 @@ REPUTATION_REGISTRY_ABI = [
         ],
         "name": "readFeedback",
         "outputs": [
-            {"internalType": "uint8", "name": "score", "type": "uint8"},
+            {"internalType": "int128", "name": "value", "type": "int128"},
+            {"internalType": "uint8", "name": "valueDecimals", "type": "uint8"},
             {"internalType": "string", "name": "tag1", "type": "string"},
             {"internalType": "string", "name": "tag2", "type": "string"},
             {"internalType": "bool", "name": "isRevoked", "type": "bool"}
@@ -293,7 +304,8 @@ REPUTATION_REGISTRY_ABI = [
         "name": "getSummary",
         "outputs": [
             {"internalType": "uint64", "name": "count", "type": "uint64"},
-            {"internalType": "uint8", "name": "averageScore", "type": "uint8"}
+            {"internalType": "int128", "name": "summaryValue", "type": "int128"},
+            {"internalType": "uint8", "name": "summaryValueDecimals", "type": "uint8"}
         ],
         "stateMutability": "view",
         "type": "function"
@@ -308,9 +320,10 @@ REPUTATION_REGISTRY_ABI = [
         ],
         "name": "readAllFeedback",
         "outputs": [
-            {"internalType": "address[]", "name": "clientAddresses", "type": "address[]"},
+            {"internalType": "address[]", "name": "clients", "type": "address[]"},
             {"internalType": "uint64[]", "name": "feedbackIndexes", "type": "uint64[]"},
-            {"internalType": "uint8[]", "name": "scores", "type": "uint8[]"},
+            {"internalType": "int128[]", "name": "values", "type": "int128[]"},
+            {"internalType": "uint8[]", "name": "valueDecimals", "type": "uint8[]"},
             {"internalType": "string[]", "name": "tag1s", "type": "string[]"},
             {"internalType": "string[]", "name": "tag2s", "type": "string[]"},
             {"internalType": "bool[]", "name": "revokedStatuses", "type": "bool[]"}
@@ -345,7 +358,8 @@ REPUTATION_REGISTRY_ABI = [
             {"indexed": True, "internalType": "uint256", "name": "agentId", "type": "uint256"},
             {"indexed": True, "internalType": "address", "name": "clientAddress", "type": "address"},
             {"indexed": False, "internalType": "uint64", "name": "feedbackIndex", "type": "uint64"},
-            {"indexed": False, "internalType": "uint8", "name": "score", "type": "uint8"},
+            {"indexed": False, "internalType": "int128", "name": "value", "type": "int128"},
+            {"indexed": False, "internalType": "uint8", "name": "valueDecimals", "type": "uint8"},
             {"indexed": True, "internalType": "string", "name": "indexedTag1", "type": "string"},
             {"indexed": False, "internalType": "string", "name": "tag1", "type": "string"},
             {"indexed": False, "internalType": "string", "name": "tag2", "type": "string"},
@@ -500,6 +514,11 @@ VALIDATION_REGISTRY_ABI = [
 # Contract registry for different chains
 # Updated addresses from: https://github.com/erc-8004/erc-8004-contracts
 DEFAULT_REGISTRIES: Dict[int, Dict[str, str]] = {
+    1: {  # Ethereum Mainnet
+        "IDENTITY": "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432",
+        "REPUTATION": "0x8004BAa17C55a88189AE136b182e5fdA19dE9b63",
+        # "VALIDATION": "0x...",  # Set when deployed/enabled
+    },
     11155111: {  # Ethereum Sepolia
         "IDENTITY": "0x8004A818BFB912233c491871b3d84c89A494BD9e",
         "REPUTATION": "0x8004B663056A597Dffe9eCcC1965A193B7388713",
@@ -526,6 +545,7 @@ DEFAULT_REGISTRIES: Dict[int, Dict[str, str]] = {
 # Default subgraph URLs for different chains
 # Note: Subgraph URLs may need to be updated when new contracts are deployed
 DEFAULT_SUBGRAPH_URLS: Dict[int, str] = {
+    1: "https://gateway.thegraph.com/api/7fd2e7d89ce3ef24cd0d4590298f0b2c/subgraphs/id/FV6RR6y13rsnCxBAicKuQEwDp8ioEGiNaWaZUmvr1F8k",  # Ethereum Mainnet
     11155111: "https://gateway.thegraph.com/api/00a452ad3cd1900273ea62c1bf283f93/subgraphs/id/6wQRC7geo9XYAhckfmfo8kbMRLeWU8KQd3XsJqFKmZLT",  # Ethereum Sepolia
     # Other chains temporarily disabled - subgraphs to be updated
     # 84532: "https://gateway.thegraph.com/api/...",  # Base Sepolia - To be updated

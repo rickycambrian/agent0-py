@@ -24,10 +24,13 @@ from .core.models import (
 try:
     from .core.sdk import SDK
     from .core.agent import Agent
+    from .core.transaction_handle import TransactionHandle, TransactionMined
     _sdk_available = True
 except ImportError:
     SDK = None
     Agent = None
+    TransactionHandle = None
+    TransactionMined = None
     _sdk_available = False
 
 # x402 payment support (optional - gracefully degrades if x402 package not installed)
@@ -97,10 +100,12 @@ from .core.wallet_derivation import (
     AGENT0_DERIVATION_PATH,
 )
 
-__version__ = "1.0.2"
+__version__ = "1.4.2"
 __all__ = [
     "SDK",
     "Agent",
+    "TransactionHandle",
+    "TransactionMined",
     "AgentId",
     "ChainId",
     "Address",

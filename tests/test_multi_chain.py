@@ -12,6 +12,8 @@ Flow:
 
 import logging
 import sys
+import os
+import pytest
 
 # Configure logging: root logger at WARNING to suppress noisy dependencies
 logging.basicConfig(
@@ -26,21 +28,22 @@ logging.getLogger('agent0_sdk').setLevel(logging.DEBUG)
 logging.getLogger('agent0_sdk.core').setLevel(logging.DEBUG)
 
 from agent0_sdk import SDK, SearchParams
-from config import CHAIN_ID, RPC_URL, print_config
+from tests.config import CHAIN_ID, RPC_URL, print_config
 
+RUN_LIVE_TESTS = os.getenv("RUN_LIVE_TESTS", "0") != "0"
 # Supported chains for multi-chain testing
 SUPPORTED_CHAINS = [11155111, 84532, 80002]  # ETH Sepolia, Base Sepolia, Polygon Amoy
 
 # Known test agents with feedback (from discovery script)
 TEST_AGENTS_WITH_FEEDBACK = {
     11155111: ["11155111:1377", "11155111:1340"],  # Both have feedback
-    84532: ["84532:557", "84532:545", "84532:543", "84532:541", "84532:540", "84532:539", "84532:538", "84532:536"],  # All have feedback and averageScore=5.0
+    84532: ["84532:557", "84532:545", "84532:543", "84532:541", "84532:540", "84532:539", "84532:538", "84532:536"],  # All have feedback and averageValue=5.0
 }
 
-# Known agents with reputation (averageScore) for reputation search tests
+# Known agents with reputation (averageValue) for reputation search tests
 TEST_AGENTS_WITH_REPUTATION = {
-    11155111: [],  # No agents with calculated averageScore on this chain
-    84532: ["84532:557", "84532:545", "84532:543", "84532:541", "84532:540", "84532:539", "84532:538", "84532:536"],  # All have averageScore=5.0
+    11155111: [],  # No agents with calculated averageValue on this chain
+    84532: ["84532:557", "84532:545", "84532:543", "84532:541", "84532:540", "84532:539", "84532:538", "84532:536"],  # All have averageValue=5.0
     80002: [],  # No agents with reputation on this chain
 }
 
@@ -161,7 +164,7 @@ def main():
                 print(f"✅ Chain {chain_id}: Found {len(feedbacks)} feedback entries")
                 print(f"   Agent ID: {test_agent_id}")
                 if feedbacks:
-                    print(f"   First feedback score: {feedbacks[0].score if feedbacks[0].score else 'N/A'}")
+                    print(f"   First feedback value: {feedbacks[0].value if feedbacks[0].value is not None else 'N/A'}")
                     if feedbacks[0].tags:
                         print(f"   First feedback tags: {feedbacks[0].tags}")
                 else:
@@ -206,7 +209,7 @@ def main():
             print(f"✅ Default chain: Found {len(feedbacks)} feedback entries")
             print(f"   Agent ID: {test_agent_id}")
             if feedbacks:
-                print(f"   First feedback score: {feedbacks[0].score if feedbacks[0].score else 'N/A'}")
+                print(f"   First feedback value: {feedbacks[0].value if feedbacks[0].value is not None else 'N/A'}")
         else:
             print("⚠️  No agents found on default chain")
     except Exception as e:
@@ -250,8 +253,8 @@ def main():
                         
                         # Show first agent details
                         first_agent = agents[0]
-                        avg_score = first_agent.extras.get('averageScore', 'N/A') if first_agent.extras else 'N/A'
-                        print(f"   First agent: {first_agent.name} (Avg Score: {avg_score})")
+                        avg_value = first_agent.extras.get('averageValue', 'N/A') if first_agent.extras else 'N/A'
+                        print(f"   First agent: {first_agent.name} (Avg Value: {avg_value})")
                     else:
                         print(f"⚠️  Chain {chain_id}: Reputation search found 0 agents")
                         print(f"   Known agents exist: {[a.agentId for a in found_agents[:3]]}")
@@ -319,8 +322,8 @@ def main():
             if agents:
                 print(f"   Sample agents:")
                 for i, agent in enumerate(agents[:3], 1):
-                    avg_score = agent.extras.get('averageScore', 'N/A') if agent.extras else 'N/A'
-                    print(f"      {i}. {agent.name} (Chain: {agent.chainId}, Avg: {avg_score})")
+                    avg_value = agent.extras.get('averageValue', 'N/A') if agent.extras else 'N/A'
+                    print(f"      {i}. {agent.name} (Chain: {agent.chainId}, Avg: {avg_value})")
         except Exception as e:
             print(f"❌ Chains {chains}: Failed - {e}")
     
@@ -367,7 +370,7 @@ def main():
                         if summary.get('count', 0) > 0:
                             reputation_found += 1
                             if reputation_found <= 3:  # Show first 3
-                                print(f"   ✅ {agent_id}: {summary['count']} feedback, avg: {summary['averageScore']:.2f}")
+                                print(f"   ✅ {agent_id}: {summary['count']} feedback, avg: {summary['averageValue']:.2f}")
                     except Exception:
                         continue
                 if reputation_found > 0:
@@ -383,8 +386,8 @@ def main():
         if agents:
             print(f"   Sample agents:")
             for i, agent in enumerate(agents[:5], 1):
-                avg_score = agent.extras.get('averageScore', 'N/A') if agent.extras else 'N/A'
-                print(f"      {i}. {agent.name} (Chain: {agent.chainId}, Avg: {avg_score})")
+                avg_value = agent.extras.get('averageValue', 'N/A') if agent.extras else 'N/A'
+                print(f"      {i}. {agent.name} (Chain: {agent.chainId}, Avg: {avg_value})")
     except Exception as e:
         print(f"❌ All chains: Failed - {e}")
     
@@ -392,10 +395,10 @@ def main():
     print("-" * 60)
     try:
         # Use known tags that exist in feedback data
-        # Test with chains that have reputation data (84532 has agents with averageScore)
+        # Test with chains that have reputation data (84532 has agents with averageValue)
         result = sdk.searchAgentsByReputation(
             tags=TEST_TAGS[:1],  # Use "price" tag which exists in feedback
-            minAverageScore=0,  # No threshold to see any results
+            minAverageValue=0,  # No threshold to see any results
             page_size=20,
             chains=[84532]  # Use chain with reputation data
         )
@@ -405,8 +408,8 @@ def main():
         print(f"   Filter: tags={TEST_TAGS[:1]}, chains=[84532]")
         if agents:
             for i, agent in enumerate(agents[:3], 1):
-                avg_score = agent.extras.get('averageScore', 'N/A') if agent.extras else 'N/A'
-                print(f"   {i}. {agent.name} (Chain: {agent.chainId}, Avg: {avg_score})")
+                avg_value = agent.extras.get('averageValue', 'N/A') if agent.extras else 'N/A'
+                print(f"   {i}. {agent.name} (Chain: {agent.chainId}, Avg: {avg_value})")
         else:
             print(f"   ⚠️  No agents found with tag '{TEST_TAGS[0]}' (may need to check if tag filtering works)")
     except Exception as e:
@@ -454,7 +457,7 @@ def main():
                     print(f"✅ Chain {chain_id}: Got reputation summary")
                     print(f"   Agent ID: {test_agent_id}")
                     print(f"   Count: {summary['count']}")
-                    print(f"   Average Score: {summary['averageScore']:.2f}")
+                    print(f"   Average Value: {summary['averageValue']:.2f}")
                 except Exception as e:
                     print(f"⚠️  Chain {chain_id}: Failed to get reputation for {test_agent_id}: {e}")
             else:
@@ -502,7 +505,7 @@ def main():
                 print(f"✅ Default chain: Got reputation summary")
                 print(f"   Agent ID: {test_agent_id}")
                 print(f"   Count: {summary['count']}")
-                print(f"   Average Score: {summary['averageScore']:.2f}")
+                print(f"   Average Value: {summary['averageValue']:.2f}")
             except Exception as e:
                 print(f"⚠️  Default chain: Failed to get reputation for {test_agent_id}: {e}")
         else:
@@ -550,7 +553,7 @@ def main():
                         if summary.get('count', 0) > 0:
                             reputation_found += 1
                             if reputation_found <= 3:  # Show first 3
-                                print(f"   ✅ {agent_id}: {summary['count']} feedback, avg: {summary['averageScore']:.2f}")
+                                print(f"   ✅ {agent_id}: {summary['count']} feedback, avg: {summary['averageValue']:.2f}")
                     except Exception:
                         continue
                 if reputation_found > 0:
@@ -574,8 +577,8 @@ def main():
         if agents:
             print(f"   Sample agents:")
             for i, agent in enumerate(agents[:5], 1):
-                avg_score = agent.extras.get('averageScore', 'N/A') if agent.extras else 'N/A'
-                print(f"      {i}. {agent.name} (Chain: {agent.chainId}, Avg: {avg_score})")
+                avg_value = agent.extras.get('averageValue', 'N/A') if agent.extras else 'N/A'
+                print(f"      {i}. {agent.name} (Chain: {agent.chainId}, Avg: {avg_value})")
     except Exception as e:
         print(f"❌ All three chains: Failed - {e}")
     
@@ -585,4 +588,14 @@ def main():
 
 
 if __name__ == "__main__":
+    main()
+
+
+@pytest.mark.integration
+def test_multi_chain_live():
+    if not RUN_LIVE_TESTS:
+        pytest.skip("Set RUN_LIVE_TESTS=1 to enable live integration tests")
+    if not RPC_URL or not RPC_URL.strip():
+        pytest.skip("RPC_URL not set")
+
     main()

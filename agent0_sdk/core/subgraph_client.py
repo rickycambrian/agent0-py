@@ -53,6 +53,12 @@ class SubgraphClient:
             if ("has no field" in msg and "responseURI" in msg) and ("responseURI" in query):
                 logger.debug("Subgraph schema missing responseURI; retrying query with responseUri")
                 return _do_query(query.replace("responseURI", "responseUri"))
+            # Some deployments still expose `x402support` instead of `x402Support`.
+            if (("has no field" in msg and "x402Support" in msg) or ("Cannot query field" in msg and "x402Support" in msg)) and (
+                "x402Support" in query
+            ):
+                logger.debug("Subgraph schema missing x402Support; retrying query with x402support")
+                return _do_query(query.replace("x402Support", "x402support"))
             # Some deployments don't expose agentWallet fields on AgentRegistrationFile.
             if (
                 "Type `AgentRegistrationFile` has no field `agentWallet`" in msg
@@ -115,7 +121,7 @@ class SubgraphClient:
                 description
                 image
                 active
-                x402support
+                x402Support
                 supportedTrusts
                 mcpEndpoint
                 mcpVersion
@@ -183,7 +189,7 @@ class SubgraphClient:
                 description
                 image
                 active
-                x402support
+                x402Support
                 supportedTrusts
                 mcpEndpoint
                 mcpVersion
@@ -260,7 +266,7 @@ class SubgraphClient:
                     orderDirection: desc
                 ) {{
                     id
-                    score
+                    value
                     feedbackIndex
                     tag1
                     tag2
@@ -326,8 +332,7 @@ class SubgraphClient:
                     agentId
                 }}
                 totalFeedback
-                averageScore
-                scoreDistribution
+                averageFeedbackValue
                 totalValidations
                 completedValidations
                 averageValidationScore
@@ -416,7 +421,7 @@ class SubgraphClient:
                 agent { id agentId chainId }
                 clientAddress
                 feedbackIndex
-                score
+                value
                 tag1
                 tag2
                 endpoint
@@ -516,11 +521,11 @@ class SubgraphClient:
             # Join all tag alternatives (each already contains complete filter set)
             tag_filter_condition = ", ".join([f"{{ {item} }}" for item in tag_where_items])
         
-        if params.minScore is not None:
-            where_conditions.append(f'score_gte: {params.minScore}')
+        if params.minValue is not None:
+            where_conditions.append(f'value_gte: "{params.minValue}"')
         
-        if params.maxScore is not None:
-            where_conditions.append(f'score_lte: {params.maxScore}')
+        if params.maxValue is not None:
+            where_conditions.append(f'value_lte: "{params.maxValue}"')
         
         # Feedback file filters
         feedback_file_filters = []
@@ -566,7 +571,7 @@ class SubgraphClient:
                 agent {{ id agentId chainId }}
                 clientAddress
                 feedbackIndex
-                score
+                value
                 tag1
                 tag2
                 endpoint
@@ -616,7 +621,7 @@ class SubgraphClient:
         skills: Optional[List[str]] = None,
         tasks: Optional[List[str]] = None,
         names: Optional[List[str]] = None,
-        minAverageScore: Optional[int] = None,  # 0-100
+        minAverageValue: Optional[float] = None,
         includeRevoked: bool = False,
         first: int = 100,
         skip: int = 0,
@@ -633,7 +638,7 @@ class SubgraphClient:
             capabilities: List of capabilities to filter feedback by
             skills: List of skills to filter feedback by
             tasks: List of tasks to filter feedback by
-            minAverageScore: Minimum average score (0-100) for included agents
+            minAverageValue: Minimum average value for included agents
             includeRevoked: Whether to include revoked feedback in calculations
             first: Number of results to return
             skip: Number of results to skip
@@ -641,7 +646,7 @@ class SubgraphClient:
             order_direction: Sort direction (asc/desc)
             
         Returns:
-            List of agents with averageScore field calculated from filtered feedback
+            List of agents with averageValue field calculated from filtered feedback
         """
         # Build feedback filter
         feedback_filters = []
@@ -773,7 +778,7 @@ class SubgraphClient:
                     description
                     image
                     active
-                    x402support
+                    x402Support
                     supportedTrusts
                     mcpEndpoint
                     mcpVersion
@@ -790,7 +795,7 @@ class SubgraphClient:
                     createdAt
                 }}
                 feedback(where: {feedback_where_for_agents}) {{
-                    score
+                    value
                     isRevoked
                     feedbackFile {{
                         capability
@@ -813,37 +818,33 @@ class SubgraphClient:
             
             agents_result = result.get('agents', [])
             
-            # Calculate average scores
+            # Calculate average values
             for agent in agents_result:
                 feedbacks = agent.get('feedback', [])
                 if feedbacks:
-                    scores = [int(fb['score']) for fb in feedbacks if fb.get('score', 0) > 0]
-                    if scores:
-                        avg_score = sum(scores) / len(scores)
-                        agent['averageScore'] = avg_score
-                    else:
-                        agent['averageScore'] = None
+                    values = [float(fb["value"]) for fb in feedbacks if fb.get("value") is not None]
+                    agent["averageValue"] = (sum(values) / len(values)) if values else None
                 else:
-                    agent['averageScore'] = None
+                    agent["averageValue"] = None
             
-            # Filter by minAverageScore
-            if minAverageScore is not None:
+            # Filter by minAverageValue
+            if minAverageValue is not None:
                 agents_result = [
                     agent for agent in agents_result
-                    if agent.get('averageScore') is not None and agent['averageScore'] >= minAverageScore
+                    if agent.get("averageValue") is not None and agent["averageValue"] >= minAverageValue
                 ]
             
             # For reputation search, filter logic:
-            # - If specific agents were requested, return them even if averageScore is None
+            # - If specific agents were requested, return them even if averageValue is None
             #   (the user explicitly asked for these agents, so return them)
             # - If general search (no specific agents), only return agents with reputation data
             if agents is None or len(agents) == 0:
                 # General search - only return agents with reputation
                 agents_result = [
                     agent for agent in agents_result
-                    if agent.get('averageScore') is not None
+                    if agent.get("averageValue") is not None
                 ]
-            # else: specific agents requested - return all requested agents (even if averageScore is None)
+            # else: specific agents requested - return all requested agents (even if averageValue is None)
             
             return agents_result
             

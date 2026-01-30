@@ -59,6 +59,44 @@ from .core.mcp_client import (
     MCPPaymentRequiredError,
 )
 
+# SpendingWallet for safe x402 payments
+from .core.spending_wallet import (
+    SpendingWallet,
+    SpendingWalletConfig,
+    SpendingRecord,
+    SpendingPolicyError,
+    SpendingLimitExceededError,
+    EndpointNotWhitelistedError,
+    DuplicatePaymentError,
+    CircuitBreakerTrippedError,
+)
+
+# SpendingPolicy for standalone policy enforcement
+from .core.spending_policy import (
+    SpendingPolicy,
+    SpendingPolicyConfig,
+    PolicyResult,
+    PolicyViolationType,
+)
+
+# SpendingTracker for persistent history
+from .core.spending_tracker import (
+    SpendingTracker,
+    TrackedPayment,
+)
+
+# Wallet derivation utilities
+from .core.wallet_derivation import (
+    generate_seed_phrase,
+    derive_spending_wallet,
+    validate_seed_phrase,
+    generate_spending_wallet,
+    derive_multiple_wallets,
+    get_derivation_path,
+    private_key_to_address,
+    AGENT0_DERIVATION_PATH,
+)
+
 __version__ = "1.0.2"
 __all__ = [
     "SDK",
@@ -91,4 +129,30 @@ __all__ = [
     "MCPToolCallError",
     "MCPConnectionError",
     "MCPPaymentRequiredError",
+    # SpendingWallet system
+    "SpendingWallet",
+    "SpendingWalletConfig",
+    "SpendingRecord",
+    "SpendingPolicyError",
+    "SpendingLimitExceededError",
+    "EndpointNotWhitelistedError",
+    "DuplicatePaymentError",
+    "CircuitBreakerTrippedError",
+    # SpendingPolicy
+    "SpendingPolicy",
+    "SpendingPolicyConfig",
+    "PolicyResult",
+    "PolicyViolationType",
+    # SpendingTracker
+    "SpendingTracker",
+    "TrackedPayment",
+    # Wallet derivation
+    "generate_seed_phrase",
+    "derive_spending_wallet",
+    "validate_seed_phrase",
+    "generate_spending_wallet",
+    "derive_multiple_wallets",
+    "get_derivation_path",
+    "private_key_to_address",
+    "AGENT0_DERIVATION_PATH",
 ]
